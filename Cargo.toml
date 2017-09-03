@@ -1,0 +1,12 @@
+[package]
+name = "tpfancontrol"
+version = "0.1.0"
+authors = ["Arnavion <arnavion@gmail.com>"]
+
+[dependencies]
+cursive = { version = "0.6.x", default-features = false, features = ["termion-backend"] }
+derive-error-chain = "0.10.x"
+error-chain = "0.10.x"
+lazy_static = "0.2.x"
+libc = "0.2.x"
+ordered-float = "0.5.x"
