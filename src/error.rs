@@ -1,4 +1,4 @@
-#[derive(Debug, error_chain)]
+#[derive(Debug, ErrorChain)]
 pub enum ErrorKind {
 	Msg(String),
 
