@@ -66,7 +66,7 @@ pub enum DesiredFanMode {
 
 impl Default for DesiredFanMode {
 	fn default() -> Self {
-		DesiredFanMode::Bios
+		DesiredFanMode::Smart
 	}
 }
 
