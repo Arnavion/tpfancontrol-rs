@@ -2,6 +2,8 @@ tpfancontrol-rs is a Linux TUI clone of troubadix's TPFanControl. It uses the sy
 
 Build with `cargo build` and run with `cargo run`
 
+The program reads a config file `/etc/tpfancontrol/config.toml` for the names of the temperature sensors and for the temperature-to-fan-level mapping. There is an example `config.toml.example` in this repository.
+
 If run without superuser rights, the program does not have write access to the kernel interface, so the controls for modifying the fan speed will be locked.
 
 
@@ -13,5 +15,4 @@ If run without superuser rights, the program does not have write access to the k
 
 ### Notes
 
-- The temperature-to-fan speed mapping for SMART mode is hard-coded in the source, and requires a rebuild to change.
 - SMART mode does not have hysteresis. The fan speed will fluctuate when the temperature is near the boundary between two mappings.

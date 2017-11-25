@@ -1,20 +1,25 @@
 extern crate cursive;
 #[macro_use]
 extern crate derive_error_chain;
+#[macro_use]
 extern crate error_chain;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
 extern crate ordered_float;
+extern crate serde;
+#[macro_use]
+extern crate serde_derive;
+extern crate toml;
 
 mod acpi;
 mod error;
 mod model;
 
-use error::{ Error, ErrorKind, Result };
+use error::{ Error, ErrorKind, Result, ResultExt };
 
-fn main() {
-	let state = ::model::State::new(SENSOR_NAMES.len(), ::std::time::Duration::from_secs(5)).unwrap();
+quick_main!(|| -> Result<()> {
+	let state = ::model::State::new(::std::time::Duration::from_secs(5))?;
 
 	let mut window = ::cursive::Cursive::new();
 	window.set_fps(2);
@@ -25,7 +30,9 @@ fn main() {
 	::std::thread::spawn(move || update(cb_sink, state));
 
 	window.run();
-}
+
+	Ok(())
+});
 
 const TEMPS_VIEW_ID: &'static str = "temps_view";
 const FAN_VIEW_ID: &'static str = "fan_view";
@@ -86,7 +93,7 @@ fn update(cb_sink: ::std::sync::mpsc::Sender<Box<Fn(&mut ::cursive::Cursive) + S
 					if let Ok(ref temps) = state.temps {
 						if let Some(&Some(max_temp)) = temps.into_iter().max() {
 							let mut computed_desired_manual_fan_level = ::model::DesiredManualFanLevel::FullSpeed;
-							for &(lower_bound, desired_manual_fan_level) in &*LEVELS {
+							for &(lower_bound, desired_manual_fan_level) in &state.config.fan_level {
 								if max_temp > lower_bound {
 									computed_desired_manual_fan_level = desired_manual_fan_level;
 								}
@@ -261,17 +268,16 @@ fn render_temps(state: &::model::State) -> ::cursive::views::BoxView<::cursive::
 
 	match state.temps {
 		Ok(ref temps) =>
-			SENSOR_NAMES.into_iter().zip(temps).fold(::cursive::views::ListView::new(), |layout, (&name, &temp)| {
-				match (temp, &state.visible_temp_sensors) {
-					(Some(temp), _) =>
-						layout
-						.child(name, ::cursive::views::TextView::new(temp.display(state.temp_scale).to_string()).h_align(::cursive::align::HAlign::Right).full_width()),
-					(None, &::model::VisibleTempSensors::All) =>
-						layout
-						.child(name, ::cursive::views::TextView::new("n/a").h_align(::cursive::align::HAlign::Right).full_width()),
-					(None, &::model::VisibleTempSensors::Active) =>
-						layout,
-				}
+			state.config.sensors.iter().zip(temps).fold(::cursive::views::ListView::new(), |layout, (name, &temp)| match (name.as_ref(), temp, &state.visible_temp_sensors) {
+				(Some(name), Some(temp), _) =>
+					layout
+					.child(name, ::cursive::views::TextView::new(temp.display(state.temp_scale).to_string()).h_align(::cursive::align::HAlign::Right).full_width()),
+				(Some(name), None, &::model::VisibleTempSensors::All) =>
+					layout
+					.child(name, ::cursive::views::TextView::new("n/a").h_align(::cursive::align::HAlign::Right).full_width()),
+				(None, _, _) |
+				(_, None, &::model::VisibleTempSensors::Active) =>
+					layout,
 			})
 			.full_screen(),
 
@@ -307,20 +313,4 @@ struct RadioGroupView<T>(::cursive::views::RadioGroup<T>);
 impl<T> ::cursive::view::View for RadioGroupView<T> {
 	fn draw(&self, _: &cursive::Printer) {
 	}
-}
-
-// TODO: Read from config
-const SENSOR_NAMES: &[&'static str] = &["cpu", "aps", "crd", "gpu", "no5", "x7d", "bat", "x7f", "bus", "pci", "pwr", "xc3"];
-
-lazy_static! {
-	// TODO: Read from config
-
-	/// The fan levels for SMART mode. The key is the temperature in Celsius, and the value is the fan level.
-	static ref LEVELS: Vec<(::acpi::Temp, ::model::DesiredManualFanLevel)> = vec![
-		(::acpi::Temp((0.).into()), ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Zero)),
-		(::acpi::Temp((45.).into()), ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::One)),
-		(::acpi::Temp((65.).into()), ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Five)),
-		(::acpi::Temp((80.).into()), ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Seven)),
-		(::acpi::Temp((90.).into()), ::model::DesiredManualFanLevel::FullSpeed),
-	];
 }

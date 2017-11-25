@@ -1,5 +1,7 @@
 #[derive(Debug)]
 pub struct State {
+	pub config: Config,
+
 	pub temps: ::Result<Vec<Option<::acpi::Temp>>>,
 	pub visible_temp_sensors: VisibleTempSensors,
 	pub temp_scale: ::acpi::TempScale,
@@ -12,11 +14,23 @@ pub struct State {
 }
 
 impl State {
-	pub fn new(num_temp_sensors: usize, fan_update_interval: ::std::time::Duration) -> ::Result<Self> {
+	pub fn new(fan_update_interval: ::std::time::Duration) -> ::Result<Self> {
+		use ::ResultExt;
+
+		let config: Config = {
+			let mut file = ::std::fs::File::open("/etc/tpfancontrol/config.toml").chain_err(|| "Could not open /etc/tpfancontrol/config.toml")?;
+			let mut config = String::new();
+			let _ = ::std::io::Read::read_to_string(&mut file, &mut config)?;
+			::toml::from_str(&config)?
+		};
+
+		let num_temp_sensors = config.sensors.len();
 		let mut temps = vec![None; num_temp_sensors];
 		let temps = ::acpi::read_temps(&mut temps).map(|()| temps);
 
 		Ok(State {
+			config,
+
 			temps,
 			visible_temp_sensors: Default::default(),
 			temp_scale: Default::default(),
@@ -33,6 +47,59 @@ impl State {
 		self.temps = ::std::mem::replace(&mut self.temps, Ok(vec![])).and_then(|mut temps| ::acpi::read_temps(&mut temps[..]).map(|()| temps));
 
 		self.fan = ::acpi::read_fan();
+	}
+}
+
+#[derive(Debug)]
+pub struct Config {
+	pub sensors: Vec<Option<String>>,
+	pub fan_level: Vec<(::acpi::Temp, ::model::DesiredManualFanLevel)>,
+}
+
+impl<'de> ::serde::Deserialize<'de> for Config {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: ::serde::de::Deserializer<'de> {
+		#[derive(Deserialize)]
+		struct Inner {
+			sensors: ::std::collections::HashMap<String, String>,
+			fan_level: ::std::collections::HashMap<String, String>,
+		}
+
+		let inner: Inner = ::serde::Deserialize::deserialize(deserializer)?;
+
+		let mut result = Config {
+			sensors: Default::default(),
+			fan_level: Default::default(),
+		};
+
+		for (key, value) in inner.sensors {
+			let index = key.parse().map_err(|_| ::serde::de::Error::invalid_value(::serde::de::Unexpected::Str(&key), &"a sensor index"))?;
+			if result.sensors.len() < index {
+				result.sensors.resize(index, None);
+			}
+			result.sensors[index - 1] = Some(value);
+		}
+
+		for (key, value) in inner.fan_level {
+			let temp: f64 = key.parse().map_err(|_| ::serde::de::Error::invalid_value(::serde::de::Unexpected::Str(&key), &"a temperature in degrees Celsius"))?;
+			let level = match &*value {
+				"0" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Zero),
+				"1" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::One),
+				"2" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Two),
+				"3" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Three),
+				"4" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Four),
+				"5" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Five),
+				"6" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Six),
+				"7" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Seven),
+				"full-speed" => ::model::DesiredManualFanLevel::FullSpeed,
+				_ => return Err(::serde::de::Error::invalid_value(::serde::de::Unexpected::Str(&value), &"0-7 or full-speed")),
+			};
+
+			result.fan_level.push((::acpi::Temp(temp.into()), level));
+		}
+
+		result.fan_level.sort_by_key(|&(temp, _)| temp);
+
+		Ok(result)
 	}
 }
 
