@@ -7,7 +7,7 @@ authors = ["Arnavion <arnavion@gmail.com>"]
 cursive = { version = "0.7.x", default-features = false, features = ["termion-backend"] }
 derive-error-chain = "0.11.x"
 error-chain = "0.11.x"
-lazy_static = "0.2.x"
+lazy_static = "1.x"
 libc = "0.2.x"
 ordered-float = "0.5.x"
 serde = "1.0.x"
