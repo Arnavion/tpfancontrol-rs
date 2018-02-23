@@ -208,7 +208,7 @@ impl ::std::fmt::Display for FanFirmwareLevel {
 
 lazy_static! {
 	/// Path to the root of the hardware monitoring sysfs interface provided by the thinkpad-acpi kernel module
-	static ref HWMON_PATH: ::std::path::PathBuf = (|| {
+	static ref HWMON_PATH: ::std::path::PathBuf = {
 		for dir_entry in ::std::fs::read_dir("/sys/class/hwmon").unwrap() {
 			if let Ok(dir_entry) = dir_entry {
 				let dir_path = dir_entry.path();
@@ -224,7 +224,7 @@ lazy_static! {
 		}
 
 		panic!("could not find hwmon device for thinkpad_acpi");
-	})();
+	};
 
 	/// Path of the file with the fan speed
 	static ref FAN_INPUT_PATH: ::std::path::PathBuf = HWMON_PATH.join("fan1_input");
