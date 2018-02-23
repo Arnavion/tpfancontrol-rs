@@ -22,7 +22,7 @@ pub fn read_temps(temps: &mut [Option<Temp>]) -> ::Result<()> {
 pub struct Temp(pub ::ordered_float::NotNaN<f64>);
 
 impl Temp {
-	pub fn display(&self, scale: TempScale) -> TempDisplay {
+	pub fn display(self, scale: TempScale) -> TempDisplay {
 		TempDisplay::new(*self.0, scale)
 	}
 }
@@ -186,8 +186,8 @@ impl FanFirmwareLevel {
 		}
 	}
 
-	fn to_hwmon_level(&self) -> u32 {
-		*self as u32
+	fn to_hwmon_level(self) -> u32 {
+		self as u32
 	}
 }
 
