@@ -41,7 +41,7 @@ const TEMP_SCALE_GROUP_ID: &'static str = "temp_scale_group";
 const FAN_SPEED_GROUP_ID: &'static str = "fan_speed_group";
 const DESIRED_MANUAL_FAN_LEVEL_ID: &'static str = "desired_manual_fan_level";
 
-fn update(cb_sink: ::std::sync::mpsc::Sender<Box<Fn(&mut ::cursive::Cursive) + Send>>, mut state: ::model::State) {
+fn update(cb_sink: ::std::sync::mpsc::Sender<Box<::cursive::CbFunc>>, mut state: ::model::State) {
 	let (settings_sender, settings_receiver) = ::std::sync::mpsc::channel();
 	let (result_sender, result_receiver) = ::std::sync::mpsc::channel();
 
@@ -50,7 +50,7 @@ fn update(cb_sink: ::std::sync::mpsc::Sender<Box<Fn(&mut ::cursive::Cursive) + S
 
 		let settings_sender = settings_sender.clone();
 
-		cb_sink.send(Box::new(move |window| {
+		cb_sink.send(Box::new(move |window: &mut ::cursive::Cursive| {
 			let visible_temp_sensors =
 				window
 				.call_on_id(VISIBLE_TEMP_SENSORS_GROUP_ID, |visible_temp_sensors_group: &mut RadioGroupView<::model::VisibleTempSensors>| visible_temp_sensors_group.0.selection())
@@ -125,7 +125,7 @@ fn update(cb_sink: ::std::sync::mpsc::Sender<Box<Fn(&mut ::cursive::Cursive) + S
 		let result_sender = result_sender.clone();
 		let (state_sender, state_receiver) = ::std::sync::mpsc::channel();
 
-		cb_sink.send(Box::new(move |window| {
+		cb_sink.send(Box::new(move |window: &mut ::cursive::Cursive| {
 			let state = state_receiver.recv().unwrap();
 
 			let temps_view_contents = render_temps(&state);
@@ -310,7 +310,7 @@ fn render_fan(state: &::model::State) -> ::cursive::views::LinearLayout {
 
 struct RadioGroupView<T>(::cursive::views::RadioGroup<T>);
 
-impl<T> ::cursive::view::View for RadioGroupView<T> {
+impl<T> ::cursive::view::View for RadioGroupView<T> where T: 'static {
 	fn draw(&self, _: &cursive::Printer) {
 	}
 }
