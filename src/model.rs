@@ -1,32 +1,30 @@
 #[derive(Debug)]
-pub struct State {
-	pub config: Config,
+pub(crate) struct State {
+	pub(crate) config: Config,
 
-	pub temps: ::Result<Vec<Option<::acpi::Temp>>>,
-	pub visible_temp_sensors: VisibleTempSensors,
-	pub temp_scale: ::acpi::TempScale,
+	pub(crate) temps: Result<Vec<Option<crate::acpi::Temp>>, crate::Error>,
+	pub(crate) visible_temp_sensors: VisibleTempSensors,
+	pub(crate) temp_scale: crate::acpi::TempScale,
 
-	pub fan_is_writable: bool,
+	pub(crate) fan_is_writable: bool,
 
-	pub fan: ::Result<(::acpi::FanLevel, ::acpi::FanSpeed)>,
-	pub desired_fan_mode: DesiredFanMode,
-	pub desired_manual_fan_level: DesiredManualFanLevel,
+	pub(crate) fan: Result<(crate::acpi::FanLevel, crate::acpi::FanSpeed), crate::Error>,
+	pub(crate) desired_fan_mode: DesiredFanMode,
+	pub(crate) desired_manual_fan_level: DesiredManualFanLevel,
 }
 
 impl State {
-	pub fn new(fan_update_interval: ::std::time::Duration) -> ::Result<Self> {
-		use ::ResultExt;
-
+	pub(crate) fn new(fan_update_interval: std::time::Duration) -> Result<Self, crate::Error> {
 		let config: Config = {
-			let mut file = ::std::fs::File::open("/etc/tpfancontrol/config.toml").chain_err(|| "Could not open /etc/tpfancontrol/config.toml")?;
+			let mut file = std::fs::File::open("/etc/tpfancontrol/config.toml").map_err(crate::Error::Config)?;
 			let mut config = String::new();
-			let _ = ::std::io::Read::read_to_string(&mut file, &mut config)?;
-			::toml::from_str(&config)?
+			let _ = std::io::Read::read_to_string(&mut file, &mut config).map_err(crate::Error::Config)?;
+			toml::from_str(&config).map_err(|err| crate::Error::Config(std::io::Error::new(std::io::ErrorKind::Other, err)))?
 		};
 
 		let num_temp_sensors = config.sensors.len();
 		let mut temps = vec![None; num_temp_sensors];
-		let temps = ::acpi::read_temps(&mut temps).map(|()| temps);
+		let temps = crate::acpi::read_temps(&mut temps).map(|()| temps);
 
 		Ok(State {
 			config,
@@ -35,36 +33,70 @@ impl State {
 			visible_temp_sensors: Default::default(),
 			temp_scale: Default::default(),
 
-			fan_is_writable: ::acpi::fan_is_writable(fan_update_interval)?,
+			fan_is_writable: crate::acpi::fan_is_writable(fan_update_interval)?,
 
-			fan: ::acpi::read_fan(),
+			fan: crate::acpi::read_fan(),
 			desired_fan_mode: Default::default(),
 			desired_manual_fan_level: Default::default(),
 		})
 	}
 
-	pub fn update_sensors(&mut self) {
-		self.temps = ::std::mem::replace(&mut self.temps, Ok(vec![])).and_then(|mut temps| ::acpi::read_temps(&mut temps[..]).map(|()| temps));
+	pub(crate) fn update_sensors(&mut self) {
+		self.temps = std::mem::replace(&mut self.temps, Ok(vec![])).and_then(|mut temps| crate::acpi::read_temps(&mut temps[..]).map(|()| temps));
 
-		self.fan = ::acpi::read_fan();
+		self.fan = crate::acpi::read_fan();
 	}
 }
 
 #[derive(Debug)]
-pub struct Config {
-	pub sensors: Vec<Option<String>>,
-	pub fan_level: Vec<(::acpi::Temp, ::model::DesiredManualFanLevel)>,
+pub(crate) struct Config {
+	pub(crate) sensors: Vec<Option<String>>,
+	pub(crate) fan_level: Vec<(crate::acpi::Temp, DesiredManualFanLevel)>,
 }
 
-impl<'de> ::serde::Deserialize<'de> for Config {
-	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: ::serde::de::Deserializer<'de> {
-		#[derive(Deserialize)]
+impl<'de> serde::Deserialize<'de> for Config {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::de::Deserializer<'de> {
 		struct Inner {
-			sensors: ::std::collections::HashMap<String, String>,
-			fan_level: ::std::collections::HashMap<String, String>,
+			sensors: std::collections::HashMap<String, String>,
+			fan_level: std::collections::HashMap<String, String>,
 		}
 
-		let inner: Inner = ::serde::Deserialize::deserialize(deserializer)?;
+		// TODO: Replace with `#[derive(serde_derive::Deserialize)]` when https://github.com/rust-lang/rust/issues/55779 is fixed
+		impl<'de> serde::Deserialize<'de> for Inner {
+			fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
+				struct Visitor;
+
+				impl<'de> serde::de::Visitor<'de> for Visitor {
+					type Value = Inner;
+
+					fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+						write!(f, "struct Config")
+					}
+
+					fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error> where A: serde::de::MapAccess<'de> {
+						let mut value_sensors: Option<_> = None;
+						let mut value_fan_level: Option<_> = None;
+
+						while let Some(key) = serde::de::MapAccess::next_key(&mut map)? {
+							match key {
+								"sensors" => value_sensors = serde::de::MapAccess::next_value(&mut map)?,
+								"fan_level" => value_fan_level = serde::de::MapAccess::next_value(&mut map)?,
+								_ => { let _: serde::de::IgnoredAny = serde::de::MapAccess::next_value(&mut map)?; },
+							}
+						}
+
+						Ok(Inner {
+							sensors: value_sensors.ok_or_else(|| serde::de::Error::missing_field("sensors"))?,
+							fan_level: value_fan_level.ok_or_else(|| serde::de::Error::missing_field("fan_level"))?,
+						})
+					}
+				}
+
+				deserializer.deserialize_struct("Config", &["sensors", "fan_level"], Visitor)
+			}
+		}
+
+		let inner: Inner = serde::Deserialize::deserialize(deserializer)?;
 
 		let mut result = Config {
 			sensors: Default::default(),
@@ -72,7 +104,7 @@ impl<'de> ::serde::Deserialize<'de> for Config {
 		};
 
 		for (key, value) in inner.sensors {
-			let index = key.parse().map_err(|_| ::serde::de::Error::invalid_value(::serde::de::Unexpected::Str(&key), &"a sensor index"))?;
+			let index = key.parse().map_err(|_| serde::de::Error::invalid_value(serde::de::Unexpected::Str(&key), &"a sensor index"))?;
 			if result.sensors.len() < index {
 				result.sensors.resize(index, None);
 			}
@@ -80,31 +112,31 @@ impl<'de> ::serde::Deserialize<'de> for Config {
 		}
 
 		for (key, value) in inner.fan_level {
-			let temp: f64 = key.parse().map_err(|_| ::serde::de::Error::invalid_value(::serde::de::Unexpected::Str(&key), &"a temperature in degrees Celsius"))?;
+			let temp: f64 = key.parse().map_err(|_| serde::de::Error::invalid_value(serde::de::Unexpected::Str(&key), &"a temperature in degrees Celsius"))?;
 			let level = match &*value {
-				"0" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Zero),
-				"1" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::One),
-				"2" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Two),
-				"3" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Three),
-				"4" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Four),
-				"5" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Five),
-				"6" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Six),
-				"7" => ::model::DesiredManualFanLevel::Firmware(::acpi::FanFirmwareLevel::Seven),
-				"full-speed" => ::model::DesiredManualFanLevel::FullSpeed,
-				_ => return Err(::serde::de::Error::invalid_value(::serde::de::Unexpected::Str(&value), &"0-7 or full-speed")),
+				"0" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::Zero),
+				"1" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::One),
+				"2" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::Two),
+				"3" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::Three),
+				"4" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::Four),
+				"5" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::Five),
+				"6" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::Six),
+				"7" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::Seven),
+				"full-speed" => DesiredManualFanLevel::FullSpeed,
+				_ => return Err(serde::de::Error::invalid_value(serde::de::Unexpected::Str(&value), &"0-7 or full-speed")),
 			};
 
-			result.fan_level.push((::acpi::Temp(temp.into()), level));
+			result.fan_level.push((crate::acpi::Temp(temp.into()), level));
 		}
 
-		result.fan_level.sort_by_key(|&(temp, _)| temp);
+		result.fan_level.sort_by_key(|(temp, _)| *temp);
 
 		Ok(result)
 	}
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum VisibleTempSensors {
+pub(crate) enum VisibleTempSensors {
 	All,
 	Active,
 }
@@ -115,9 +147,9 @@ impl Default for VisibleTempSensors {
 	}
 }
 
-impl ::std::fmt::Display for VisibleTempSensors {
-	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-		match *self {
+impl std::fmt::Display for VisibleTempSensors {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
 			VisibleTempSensors::All => write!(f, "all"),
 			VisibleTempSensors::Active => write!(f, "active"),
 		}
@@ -125,7 +157,7 @@ impl ::std::fmt::Display for VisibleTempSensors {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum DesiredFanMode {
+pub(crate) enum DesiredFanMode {
 	Bios,
 	Smart,
 	Manual,
@@ -137,9 +169,9 @@ impl Default for DesiredFanMode {
 	}
 }
 
-impl ::std::fmt::Display for DesiredFanMode {
-	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-		match *self {
+impl std::fmt::Display for DesiredFanMode {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
 			DesiredFanMode::Bios => write!(f, "BIOS"),
 			DesiredFanMode::Smart => write!(f, "Smart"),
 			DesiredFanMode::Manual => write!(f, "Manual"),
@@ -148,8 +180,8 @@ impl ::std::fmt::Display for DesiredFanMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DesiredManualFanLevel {
-	Firmware(::acpi::FanFirmwareLevel),
+pub(crate) enum DesiredManualFanLevel {
+	Firmware(crate::acpi::FanFirmwareLevel),
 	FullSpeed,
 }
 
@@ -159,9 +191,9 @@ impl Default for DesiredManualFanLevel {
 	}
 }
 
-impl ::std::fmt::Display for DesiredManualFanLevel {
-	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-		match *self {
+impl std::fmt::Display for DesiredManualFanLevel {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
 			DesiredManualFanLevel::Firmware(fan_firmware_level) => write!(f, "{}", fan_firmware_level),
 			DesiredManualFanLevel::FullSpeed => write!(f, "Full speed"),
 		}

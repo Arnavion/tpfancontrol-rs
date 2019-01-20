@@ -1,17 +1,10 @@
-pub fn read_temps(temps: &mut [Option<Temp>]) -> ::Result<()> {
+pub(crate) fn read_temps(temps: &mut [Option<Temp>]) -> Result<(), crate::Error> {
 	for (i, out) in temps.iter_mut().enumerate() {
 		let path = HWMON_PATH.join(format!("temp{}_input", i + 1));
 		match read_line(&path) {
 			Ok(temp) => *out = Some(Temp(((temp as f64) / 1000.).into())),
-
-			Err(::Error(::ErrorKind::Io(err), _)) => if let Some(::libc::ENXIO) = err.raw_os_error() {
-				*out = None;
-			}
-			else {
-				return Err(err.into());
-			},
-
-			Err(err) => return Err(err.into()),
+			Err(crate::Error::Enxio) => *out = None,
+			Err(err) => return Err(err),
 		}
 	}
 
@@ -19,16 +12,16 @@ pub fn read_temps(temps: &mut [Option<Temp>]) -> ::Result<()> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub struct Temp(pub ::ordered_float::NotNaN<f64>);
+pub(crate) struct Temp(pub(crate) ordered_float::NotNan<f64>);
 
 impl Temp {
-	pub fn display(self, scale: TempScale) -> TempDisplay {
+	pub(crate) fn display(self, scale: TempScale) -> TempDisplay {
 		TempDisplay::new(*self.0, scale)
 	}
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum TempScale {
+pub(crate) enum TempScale {
 	Celsius,
 	Fahrenheit,
 }
@@ -39,9 +32,9 @@ impl Default for TempScale {
 	}
 }
 
-impl ::std::fmt::Display for TempScale {
-	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-		match *self {
+impl std::fmt::Display for TempScale {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
 			TempScale::Celsius => write!(f, "\u{B0}C"),
 			TempScale::Fahrenheit => write!(f, "\u{B0}F"),
 		}
@@ -49,7 +42,7 @@ impl ::std::fmt::Display for TempScale {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct TempDisplay(f64, TempScale);
+pub(crate) struct TempDisplay(f64, TempScale);
 
 impl TempDisplay {
 	fn new(temp: f64, scale: TempScale) -> Self {
@@ -62,22 +55,33 @@ impl TempDisplay {
 	}
 }
 
-impl ::std::fmt::Display for TempDisplay {
-	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+impl std::fmt::Display for TempDisplay {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(f, "{} {}", self.0, self.1)
 	}
 }
 
-pub fn read_fan() -> ::Result<(FanLevel, FanSpeed)> {
+pub(crate) fn read_fan() -> Result<(FanLevel, FanSpeed), crate::Error> {
 	let pwm_mode = read_line(&PWM_ENABLE_PATH)?;
 	let level = match pwm_mode {
 		2 => FanLevel::Auto,
+
 		1 => {
 			let hwmon_level = read_line(&PWM_PATH)?;
-			FanLevel::Firmware(FanFirmwareLevel::from_hwmon_level(hwmon_level).ok_or_else(|| format!("unrecognized hwmon level {}", hwmon_level))?)
+			FanLevel::Firmware(
+				FanFirmwareLevel::from_hwmon_level(hwmon_level)
+				.ok_or_else(|| crate::Error::Acpi(
+					PWM_ENABLE_PATH.clone(),
+					std::io::Error::new(std::io::ErrorKind::Other, format!("unrecognized hwmon level {}", hwmon_level)),
+				))?)
 		},
+
 		0 => FanLevel::FullSpeed,
-		level => return Err(format!("unrecognized PWM mode {}", level).into()),
+
+		level => return Err(crate::Error::Acpi(
+			PWM_ENABLE_PATH.clone(),
+			std::io::Error::new(std::io::ErrorKind::Other, format!("unrecognized PWM mode {}", level)),
+		)),
 	};
 
 	let speed = FanSpeed(read_line(&FAN_INPUT_PATH)?);
@@ -85,48 +89,80 @@ pub fn read_fan() -> ::Result<(FanLevel, FanSpeed)> {
 	Ok((level, speed))
 }
 
-pub fn fan_is_writable(update_interval: ::std::time::Duration) -> ::Result<bool> {
-	use ::std::io::Write;
+pub(crate) fn fan_is_writable(update_interval: std::time::Duration) -> Result<bool, crate::Error> {
+	use std::io::Write;
 
-	match ::std::fs::File::create(&*FAN_WATCHDOG_PATH) {
+	match std::fs::File::create(&*FAN_WATCHDOG_PATH) {
 		Ok(mut file) => {
-			write!(&mut file, "{}", update_interval.as_secs() * 2)?;
+			write!(&mut file, "{}", update_interval.as_secs() * 2).map_err(|err| crate::Error::Acpi(
+				FAN_WATCHDOG_PATH.clone(),
+				err,
+			))?;
+
 			Ok(true)
 		},
 
-		Err(err) => if let ::std::io::ErrorKind::PermissionDenied = err.kind() {
-			Ok(false)
-		}
-		else {
-			Err(err.into())
-		},
+		Err(ref err) if err.kind() == std::io::ErrorKind::PermissionDenied => Ok(false),
+
+		Err(err) => Err(crate::Error::Acpi(
+			FAN_WATCHDOG_PATH.clone(),
+			err,
+		)),
 	}
 }
 
-pub fn write_fan(fan_level: FanLevel) -> ::Result<()> {
-	use ::std::io::Write;
+pub(crate) fn write_fan(fan_level: FanLevel) -> Result<(), crate::Error> {
+	use std::io::Write;
 
 	match fan_level {
 		FanLevel::Auto => {
-			let mut file = ::std::fs::File::create(&*PWM_ENABLE_PATH)?;
-			write!(file, "2")?;
+			let mut file = std::fs::File::create(&*PWM_ENABLE_PATH).map_err(|err| crate::Error::Acpi(
+				PWM_ENABLE_PATH.clone(),
+				err,
+			))?;
+
+			write!(file, "2").map_err(|err| crate::Error::Acpi(
+				PWM_ENABLE_PATH.clone(),
+				err,
+			))?;
 		},
 
 		FanLevel::Firmware(fan_firmware_level) => {
 			{
-				let mut file = ::std::fs::File::create(&*PWM_ENABLE_PATH)?;
-				write!(file, "1")?;
+				let mut file = std::fs::File::create(&*PWM_ENABLE_PATH).map_err(|err| crate::Error::Acpi(
+					PWM_ENABLE_PATH.clone(),
+					err,
+				))?;
+
+				write!(file, "1").map_err(|err| crate::Error::Acpi(
+					PWM_ENABLE_PATH.clone(),
+					err,
+				))?;
 			}
 
 			{
-				let mut file = ::std::fs::File::create(&*PWM_PATH)?;
-				write!(file, "{}", fan_firmware_level.to_hwmon_level())?;
+				let mut file = std::fs::File::create(&*PWM_PATH).map_err(|err| crate::Error::Acpi(
+					PWM_PATH.clone(),
+					err,
+				))?;
+
+				write!(file, "{}", fan_firmware_level.to_hwmon_level()).map_err(|err| crate::Error::Acpi(
+					PWM_PATH.clone(),
+					err,
+				))?;
 			}
 		},
 
 		FanLevel::FullSpeed => {
-			let mut file = ::std::fs::File::create(&*PWM_ENABLE_PATH)?;
-			write!(file, "0")?;
+			let mut file = std::fs::File::create(&*PWM_ENABLE_PATH).map_err(|err| crate::Error::Acpi(
+				PWM_ENABLE_PATH.clone(),
+				err,
+			))?;
+
+			write!(file, "0").map_err(|err| crate::Error::Acpi(
+				PWM_ENABLE_PATH.clone(),
+				err,
+			))?;
 		},
 	}
 
@@ -134,15 +170,15 @@ pub fn write_fan(fan_level: FanLevel) -> ::Result<()> {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum FanLevel {
+pub(crate) enum FanLevel {
 	Auto,
 	Firmware(FanFirmwareLevel),
 	FullSpeed,
 }
 
-impl ::std::fmt::Display for FanLevel {
-	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-		match *self {
+impl std::fmt::Display for FanLevel {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
 			FanLevel::Auto => write!(f, "Auto"),
 			FanLevel::Firmware(level) => write!(f, "{}", level),
 			FanLevel::FullSpeed => write!(f, "Full speed"),
@@ -151,16 +187,16 @@ impl ::std::fmt::Display for FanLevel {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct FanSpeed(u32);
+pub(crate) struct FanSpeed(pub(crate) u32);
 
-impl ::std::fmt::Display for FanSpeed {
-	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+impl std::fmt::Display for FanSpeed {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(f, "{} RPM", self.0)
 	}
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FanFirmwareLevel {
+pub(crate) enum FanFirmwareLevel {
 	Zero = 0,
 	One = 36,
 	Two = 72,
@@ -191,9 +227,9 @@ impl FanFirmwareLevel {
 	}
 }
 
-impl ::std::fmt::Display for FanFirmwareLevel {
-	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-		match *self {
+impl std::fmt::Display for FanFirmwareLevel {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
 			FanFirmwareLevel::Zero => write!(f, "0"),
 			FanFirmwareLevel::One => write!(f, "1"),
 			FanFirmwareLevel::Two => write!(f, "2"),
@@ -206,15 +242,15 @@ impl ::std::fmt::Display for FanFirmwareLevel {
 	}
 }
 
-lazy_static! {
+lazy_static::lazy_static! {
 	/// Path to the root of the hardware monitoring sysfs interface provided by the thinkpad-acpi kernel module
-	static ref HWMON_PATH: ::std::path::PathBuf = {
-		for dir_entry in ::std::fs::read_dir("/sys/class/hwmon").unwrap() {
+	static ref HWMON_PATH: std::path::PathBuf = {
+		for dir_entry in std::fs::read_dir("/sys/class/hwmon").unwrap() {
 			if let Ok(dir_entry) = dir_entry {
 				let dir_path = dir_entry.path();
-				if let Ok(mut name_file) = ::std::fs::File::open(dir_path.join("name")) {
+				if let Ok(mut name_file) = std::fs::File::open(dir_path.join("name")) {
 					let mut name = String::new();
-					if let Ok(_) = ::std::io::Read::read_to_string(&mut name_file, &mut name) {
+					if let Ok(_) = std::io::Read::read_to_string(&mut name_file, &mut name) {
 						if name == "thinkpad\n" {
 							return dir_path;
 						}
@@ -227,25 +263,40 @@ lazy_static! {
 	};
 
 	/// Path of the file with the fan speed
-	static ref FAN_INPUT_PATH: ::std::path::PathBuf = HWMON_PATH.join("fan1_input");
+	static ref FAN_INPUT_PATH: std::path::PathBuf = HWMON_PATH.join("fan1_input");
 
 	/// Path of the fan watchdog file
-	static ref FAN_WATCHDOG_PATH: ::std::path::PathBuf = HWMON_PATH.join("device").join("driver").join("fan_watchdog");
+	static ref FAN_WATCHDOG_PATH: std::path::PathBuf = HWMON_PATH.join("device").join("driver").join("fan_watchdog");
 
 	/// Path of the file with the pwm mode
-	static ref PWM_ENABLE_PATH: ::std::path::PathBuf = HWMON_PATH.join("pwm1_enable");
+	static ref PWM_ENABLE_PATH: std::path::PathBuf = HWMON_PATH.join("pwm1_enable");
 
 	/// Path of the file with the fan level
-	static ref PWM_PATH: ::std::path::PathBuf = HWMON_PATH.join("pwm1");
+	static ref PWM_PATH: std::path::PathBuf = HWMON_PATH.join("pwm1");
 }
 
-fn read_line(path: &::std::path::Path) -> ::Result<u32> {
-	let file = ::std::fs::File::open(path)?;
-	let file = ::std::io::BufReader::new(file);
+fn read_line(path: &std::path::Path) -> Result<u32, crate::Error> {
+	let file = std::io::BufReader::new(std::fs::File::open(path).map_err(|err| crate::Error::Acpi(
+		path.to_path_buf(),
+		err,
+	))?);
 
-	Ok(match ::std::io::BufRead::lines(file).next() {
-		Some(Ok(line)) => line.parse()?,
-		Some(Err(err)) => Err(err)?,
-		None => Err("empty file")?,
+	Ok(match std::io::BufRead::lines(file).next() {
+		Some(Ok(line)) => line.parse().map_err(|err| crate::Error::Acpi(
+			path.to_path_buf(),
+			std::io::Error::new(std::io::ErrorKind::Other, err),
+		))?,
+
+		Some(Err(ref err)) if err.raw_os_error() == Some(libc::ENXIO) => return Err(crate::Error::Enxio),
+
+		Some(Err(err)) => return Err(crate::Error::Acpi(
+			path.to_path_buf(),
+			std::io::Error::new(std::io::ErrorKind::Other, err),
+		)),
+
+		None => return Err(crate::Error::Acpi(
+			path.to_path_buf(),
+			std::io::Error::new(std::io::ErrorKind::Other, "empty file"),
+		)),
 	})
 }
