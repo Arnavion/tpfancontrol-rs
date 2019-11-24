@@ -231,9 +231,9 @@ fn render(state: &model::State) -> cursive::views::LinearLayout {
 							let mut view =
 								cursive::views::SelectView::new()
 								.popup()
-								.with_all(all_desired_manual_fan_levels.into_iter().map(|&desired_manual_fan_level|
+								.with_all(all_desired_manual_fan_levels.iter().map(|&desired_manual_fan_level|
 									(desired_manual_fan_level.to_string(), desired_manual_fan_level)));
-							view.set_selection(all_desired_manual_fan_levels.into_iter().position(|v| v == &state.desired_manual_fan_level).unwrap());
+							view.set_selection(all_desired_manual_fan_levels.iter().position(|v| v == &state.desired_manual_fan_level).unwrap());
 							view.set_enabled(state.fan_is_writable);
 							cursive::views::IdView::new(DESIRED_MANUAL_FAN_LEVEL_ID, view)
 						}))
