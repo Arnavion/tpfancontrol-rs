@@ -4,7 +4,7 @@ Build with `cargo build` and run with `cargo run`
 
 Install with `cargo install --git 'https://github.com/Arnavion/tpfancontrol-rs'`
 
-The program reads a config file `/etc/tpfancontrol/config.toml` for the names of the temperature sensors and for the temperature-to-fan-level mapping. There is an example `config.toml.example` in this repository.
+The program reads a config file `/etc/tpfancontrol/config.toml` for the names of the temperature sensors and for the temperature-to-fan-level mapping. There is an example [`config.toml.example`](./config.toml.example) in this repository.
 
 If run without superuser rights, the program does not have write access to the kernel interface, so the controls for modifying the fan speed will be locked.
 
