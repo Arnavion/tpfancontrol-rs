@@ -2,12 +2,12 @@
 name = "tpfancontrol"
 version = "0.1.0"
 authors = ["Arnavion <arnavion@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-cursive = { version = "0.10.x", default-features = false, features = ["termion-backend"] }
-lazy_static = "1"
+cursive = { version = "0.20", default-features = false, features = ["termion-backend"] }
+once_cell = "1"
 libc = "0.2"
-ordered-float = "1"
+ordered-float = "3"
 serde = "1"
 toml = "0.5"

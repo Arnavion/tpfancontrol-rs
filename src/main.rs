@@ -1,4 +1,9 @@
 #![deny(rust_2018_idioms, warnings)]
+#![deny(clippy::all, clippy::pedantic)]
+#![allow(
+	clippy::default_trait_access,
+	clippy::too_many_lines,
+)]
 
 mod acpi;
 
@@ -10,35 +15,37 @@ mod model;
 fn main() -> Result<(), Error> {
 	let mut state = model::State::new(std::time::Duration::from_secs(5))?;
 
-	let mut window = cursive::Cursive::termion();
+	let mut window = cursive::Cursive::new();
 	window.set_fps(2);
 
 	window.add_fullscreen_layer(render(&state));
+
+	let mut window = window.runner(cursive::backends::termion::Backend::init().map_err(Error::InitializeUi)?);
 
 	loop {
 		state.update_sensors();
 
 		let visible_temp_sensors =
 			window
-			.call_on_id(VISIBLE_TEMP_SENSORS_GROUP_ID,
+			.call_on_name(VISIBLE_TEMP_SENSORS_GROUP_ID,
 				|visible_temp_sensors_group: &mut RadioGroupView<model::VisibleTempSensors>| visible_temp_sensors_group.0.selection())
 			.map_or_else(Default::default, |visible_temp_sensors| *visible_temp_sensors);
 
 		let temp_scale =
 			window
-			.call_on_id(TEMP_SCALE_GROUP_ID,
+			.call_on_name(TEMP_SCALE_GROUP_ID,
 				|temp_scale_group: &mut RadioGroupView<acpi::TempScale>| temp_scale_group.0.selection())
 			.map_or_else(Default::default, |temp_scale| *temp_scale);
 
 		let desired_fan_mode =
 			window
-			.call_on_id(FAN_SPEED_GROUP_ID,
+			.call_on_name(FAN_SPEED_GROUP_ID,
 				|fan_speed_group: &mut RadioGroupView<model::DesiredFanMode>| fan_speed_group.0.selection())
 			.map_or_else(Default::default, |desired_fan_mode| *desired_fan_mode);
 
 		let desired_manual_fan_level =
 			window
-			.call_on_id(DESIRED_MANUAL_FAN_LEVEL_ID,
+			.call_on_name(DESIRED_MANUAL_FAN_LEVEL_ID,
 				|desired_manual_fan_level: &mut cursive::views::SelectView<model::DesiredManualFanLevel>| desired_manual_fan_level.selection())
 			.and_then(|desired_manual_fan_level| desired_manual_fan_level)
 			.map_or_else(Default::default, |desired_manual_fan_level| *desired_manual_fan_level);
@@ -58,7 +65,7 @@ fn main() -> Result<(), Error> {
 				model::DesiredFanMode::Bios => acpi::FanLevel::Auto,
 				model::DesiredFanMode::Smart => {
 					if let Ok(temps) = &state.temps {
-						if let Some(Some(max_temp)) = temps.into_iter().max() {
+						if let Some(Some(max_temp)) = temps.iter().max() {
 							let mut computed_desired_manual_fan_level = model::DesiredManualFanLevel::FullSpeed;
 							for (lower_bound, desired_manual_fan_level) in &state.config.fan_level {
 								if max_temp > lower_bound {
@@ -96,7 +103,7 @@ fn main() -> Result<(), Error> {
 				return Err(err);
 			},
 		};
-		window.call_on_id(TEMPS_VIEW_ID, |temps_view: &mut cursive::views::StackView| {
+		window.call_on_name(TEMPS_VIEW_ID, |temps_view: &mut cursive::views::StackView| {
 			temps_view.pop_layer();
 			temps_view.add_fullscreen_layer(temps_view_contents);
 		}).unwrap();
@@ -108,7 +115,7 @@ fn main() -> Result<(), Error> {
 				return Err(err);
 			},
 		};
-		window.call_on_id(FAN_VIEW_ID, |fan_view: &mut cursive::views::StackView| {
+		window.call_on_name(FAN_VIEW_ID, |fan_view: &mut cursive::views::StackView| {
 			fan_view.pop_layer();
 			fan_view.add_fullscreen_layer(fan_view_contents);
 		}).unwrap();
@@ -121,22 +128,22 @@ fn main() -> Result<(), Error> {
 	}
 }
 
-const TEMPS_VIEW_ID: &'static str = "temps_view";
-const FAN_VIEW_ID: &'static str = "fan_view";
-const VISIBLE_TEMP_SENSORS_GROUP_ID: &'static str = "visible_temp_sensors_group";
-const TEMP_SCALE_GROUP_ID: &'static str = "temp_scale_group";
-const FAN_SPEED_GROUP_ID: &'static str = "fan_speed_group";
-const DESIRED_MANUAL_FAN_LEVEL_ID: &'static str = "desired_manual_fan_level";
+const TEMPS_VIEW_ID: &str = "temps_view";
+const FAN_VIEW_ID: &str = "fan_view";
+const VISIBLE_TEMP_SENSORS_GROUP_ID: &str = "visible_temp_sensors_group";
+const TEMP_SCALE_GROUP_ID: &str = "temp_scale_group";
+const FAN_SPEED_GROUP_ID: &str = "fan_speed_group";
+const DESIRED_MANUAL_FAN_LEVEL_ID: &str = "desired_manual_fan_level";
 
 fn render(state: &model::State) -> cursive::views::LinearLayout {
-	use cursive::view::Boxable;
+	use cursive::view::Resizable;
 
 	cursive::views::LinearLayout::horizontal()
 	.child(
 		cursive::views::Panel::new(
 			cursive::views::LinearLayout::vertical()
 			.child(cursive::views::TextView::new("Temperatures").center().full_width())
-			.child(cursive::views::IdView::new(TEMPS_VIEW_ID, cursive::views::StackView::new()))
+			.child(cursive::views::NamedView::new(TEMPS_VIEW_ID, cursive::views::StackView::new()))
 			.child({
 				let mut visible_temp_sensors_group = cursive::views::RadioGroup::new();
 
@@ -155,7 +162,7 @@ fn render(state: &model::State) -> cursive::views::LinearLayout {
 					}
 					button.full_width()
 				})
-				.child(cursive::views::IdView::new(VISIBLE_TEMP_SENSORS_GROUP_ID, RadioGroupView(visible_temp_sensors_group)))
+				.child(cursive::views::NamedView::new(VISIBLE_TEMP_SENSORS_GROUP_ID, RadioGroupView(visible_temp_sensors_group)))
 			})
 			.child({
 				let mut temp_scale_group = cursive::views::RadioGroup::new();
@@ -175,13 +182,13 @@ fn render(state: &model::State) -> cursive::views::LinearLayout {
 					}
 					button.full_width()
 				})
-				.child(cursive::views::IdView::new(TEMP_SCALE_GROUP_ID, RadioGroupView(temp_scale_group)))
+				.child(cursive::views::NamedView::new(TEMP_SCALE_GROUP_ID, RadioGroupView(temp_scale_group)))
 			})))
 	.child(
 		cursive::views::Panel::new(
 			cursive::views::LinearLayout::vertical()
 			.child(cursive::views::TextView::new("Fan").center().full_width())
-			.child(cursive::views::IdView::new(FAN_VIEW_ID, cursive::views::StackView::new()))
+			.child(cursive::views::NamedView::new(FAN_VIEW_ID, cursive::views::StackView::new()))
 			.child(
 				cursive::views::LinearLayout::horizontal()
 				.child(cursive::views::TextView::new("Mode").full_width())
@@ -235,14 +242,14 @@ fn render(state: &model::State) -> cursive::views::LinearLayout {
 									(desired_manual_fan_level.to_string(), desired_manual_fan_level)));
 							view.set_selection(all_desired_manual_fan_levels.iter().position(|v| v == &state.desired_manual_fan_level).unwrap());
 							view.set_enabled(state.fan_is_writable);
-							cursive::views::IdView::new(DESIRED_MANUAL_FAN_LEVEL_ID, view)
+							cursive::views::NamedView::new(DESIRED_MANUAL_FAN_LEVEL_ID, view)
 						}))
-					.child(cursive::views::IdView::new(FAN_SPEED_GROUP_ID, RadioGroupView(fan_speed_group)))
+					.child(cursive::views::NamedView::new(FAN_SPEED_GROUP_ID, RadioGroupView(fan_speed_group)))
 				}))))
 }
 
-fn render_temps(state: &mut model::State) -> Result<cursive::views::BoxView<cursive::views::ListView>, Error> {
-	use cursive::view::Boxable;
+fn render_temps(state: &mut model::State) -> Result<cursive::views::ResizedView<cursive::views::ListView>, Error> {
+	use cursive::view::Resizable;
 
 	if let Ok(temps) = &state.temps {
 		Ok(
@@ -264,12 +271,12 @@ fn render_temps(state: &mut model::State) -> Result<cursive::views::BoxView<curs
 	}
 	else {
 		let err = std::mem::replace(&mut state.temps, Ok(vec![])).unwrap_err();
-		return Err(err);
+		Err(err)
 	}
 }
 
 fn render_fan(state: &mut model::State) -> Result<cursive::views::LinearLayout, Error> {
-	use cursive::view::Boxable;
+	use cursive::view::Resizable;
 
 	if let Ok((fan_level, fan_speed)) = &state.fan {
 		Ok(
@@ -287,7 +294,7 @@ fn render_fan(state: &mut model::State) -> Result<cursive::views::LinearLayout, 
 	}
 	else {
 		let err = std::mem::replace(&mut state.fan, Ok((acpi::FanLevel::Auto, acpi::FanSpeed(0)))).unwrap_err();
-		return Err(err);
+		Err(err)
 	}
 }
 

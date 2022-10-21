@@ -113,6 +113,7 @@ impl<'de> serde::Deserialize<'de> for Config {
 
 		for (key, value) in inner.fan_level {
 			let temp: f64 = key.parse().map_err(|_| serde::de::Error::invalid_value(serde::de::Unexpected::Str(&key), &"a temperature in degrees Celsius"))?;
+			let temp: ordered_float::NotNan<_> = temp.try_into().map_err(|_| serde::de::Error::invalid_value(serde::de::Unexpected::Str(&key), &"a temperature in degrees Celsius"))?;
 			let level = match &*value {
 				"0" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::Zero),
 				"1" => DesiredManualFanLevel::Firmware(crate::acpi::FanFirmwareLevel::One),
@@ -126,7 +127,7 @@ impl<'de> serde::Deserialize<'de> for Config {
 				_ => return Err(serde::de::Error::invalid_value(serde::de::Unexpected::Str(&value), &"0-7 or full-speed")),
 			};
 
-			result.fan_level.push((crate::acpi::Temp(temp.into()), level));
+			result.fan_level.push((crate::acpi::Temp(temp), level));
 		}
 
 		result.fan_level.sort_by_key(|(temp, _)| *temp);
@@ -194,7 +195,7 @@ impl Default for DesiredManualFanLevel {
 impl std::fmt::Display for DesiredManualFanLevel {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			DesiredManualFanLevel::Firmware(fan_firmware_level) => write!(f, "{}", fan_firmware_level),
+			DesiredManualFanLevel::Firmware(fan_firmware_level) => write!(f, "{fan_firmware_level}"),
 			DesiredManualFanLevel::FullSpeed => write!(f, "Full speed"),
 		}
 	}

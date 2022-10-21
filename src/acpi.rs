@@ -2,7 +2,7 @@ pub(crate) fn read_temps(temps: &mut [Option<Temp>]) -> Result<(), crate::Error>
 	for (i, out) in temps.iter_mut().enumerate() {
 		let path = HWMON_PATH.join(format!("temp{}_input", i + 1));
 		match read_line(&path) {
-			Ok(temp) => *out = Some(Temp(((temp as f64) / 1000.).into())),
+			Ok(temp) => *out = Some(Temp(ordered_float::NotNan::from(temp) / 1000.)),
 			Err(crate::Error::Enxio) => *out = None,
 			Err(err) => return Err(err),
 		}
@@ -72,7 +72,7 @@ pub(crate) fn read_fan() -> Result<(FanLevel, FanSpeed), crate::Error> {
 				FanFirmwareLevel::from_hwmon_level(hwmon_level)
 				.ok_or_else(|| crate::Error::Acpi(
 					PWM_ENABLE_PATH.clone(),
-					std::io::Error::new(std::io::ErrorKind::Other, format!("unrecognized hwmon level {}", hwmon_level)),
+					std::io::Error::new(std::io::ErrorKind::Other, format!("unrecognized hwmon level {hwmon_level}")),
 				))?)
 		},
 
@@ -80,7 +80,7 @@ pub(crate) fn read_fan() -> Result<(FanLevel, FanSpeed), crate::Error> {
 
 		level => return Err(crate::Error::Acpi(
 			PWM_ENABLE_PATH.clone(),
-			std::io::Error::new(std::io::ErrorKind::Other, format!("unrecognized PWM mode {}", level)),
+			std::io::Error::new(std::io::ErrorKind::Other, format!("unrecognized PWM mode {level}")),
 		)),
 	};
 
@@ -180,7 +180,7 @@ impl std::fmt::Display for FanLevel {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			FanLevel::Auto => write!(f, "Auto"),
-			FanLevel::Firmware(level) => write!(f, "{}", level),
+			FanLevel::Firmware(level) => write!(f, "{level}"),
 			FanLevel::FullSpeed => write!(f, "Full speed"),
 		}
 	}
@@ -242,38 +242,32 @@ impl std::fmt::Display for FanFirmwareLevel {
 	}
 }
 
-lazy_static::lazy_static! {
-	/// Path to the root of the hardware monitoring sysfs interface provided by the thinkpad-acpi kernel module
-	static ref HWMON_PATH: std::path::PathBuf = {
-		for dir_entry in std::fs::read_dir("/sys/class/hwmon").unwrap() {
-			if let Ok(dir_entry) = dir_entry {
-				let dir_path = dir_entry.path();
-				if let Ok(mut name_file) = std::fs::File::open(dir_path.join("name")) {
-					let mut name = String::new();
-					if let Ok(_) = std::io::Read::read_to_string(&mut name_file, &mut name) {
-						if name == "thinkpad\n" {
-							return dir_path;
-						}
-					}
-				}
+/// Path to the root of the hardware monitoring sysfs interface provided by the thinkpad-acpi kernel module
+static HWMON_PATH: once_cell::sync::Lazy<std::path::PathBuf> = once_cell::sync::Lazy::new(|| {
+	for dir_entry in std::fs::read_dir("/sys/class/hwmon").unwrap().flatten() {
+		let dir_path = dir_entry.path();
+		if let Ok(mut name_file) = std::fs::File::open(dir_path.join("name")) {
+			let mut name = String::new();
+			if std::io::Read::read_to_string(&mut name_file, &mut name).is_ok() && name == "thinkpad\n" {
+				return dir_path;
 			}
 		}
+	}
 
-		panic!("could not find hwmon device for thinkpad_acpi");
-	};
+	panic!("could not find hwmon device for thinkpad_acpi");
+});
 
-	/// Path of the file with the fan speed
-	static ref FAN_INPUT_PATH: std::path::PathBuf = HWMON_PATH.join("fan1_input");
+/// Path of the file with the fan speed
+static FAN_INPUT_PATH: once_cell::sync::Lazy<std::path::PathBuf> = once_cell::sync::Lazy::new(|| HWMON_PATH.join("fan1_input"));
 
-	/// Path of the fan watchdog file
-	static ref FAN_WATCHDOG_PATH: std::path::PathBuf = HWMON_PATH.join("device").join("driver").join("fan_watchdog");
+/// Path of the fan watchdog file
+static FAN_WATCHDOG_PATH: once_cell::sync::Lazy<std::path::PathBuf> = once_cell::sync::Lazy::new(|| HWMON_PATH.join("device").join("driver").join("fan_watchdog"));
 
-	/// Path of the file with the pwm mode
-	static ref PWM_ENABLE_PATH: std::path::PathBuf = HWMON_PATH.join("pwm1_enable");
+/// Path of the file with the pwm mode
+static PWM_ENABLE_PATH: once_cell::sync::Lazy<std::path::PathBuf> = once_cell::sync::Lazy::new(|| HWMON_PATH.join("pwm1_enable"));
 
-	/// Path of the file with the fan level
-	static ref PWM_PATH: std::path::PathBuf = HWMON_PATH.join("pwm1");
-}
+/// Path of the file with the fan level
+static PWM_PATH: once_cell::sync::Lazy<std::path::PathBuf> = once_cell::sync::Lazy::new(|| HWMON_PATH.join("pwm1"));
 
 fn read_line(path: &std::path::Path) -> Result<u32, crate::Error> {
 	let file = std::io::BufReader::new(std::fs::File::open(path).map_err(|err| crate::Error::Acpi(
